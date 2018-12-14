@@ -1,0 +1,194 @@
+static_resources:
+  listeners:
+  - name: listeners-01
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 80
+    filter_chains:
+    - filter_chain_match: 
+        # prefix_ranges: 
+        #   address_prefix: "172.31.0.0"
+        #   prefix_len: 16
+        # server_names: ["circuit_breaker_test"]
+      filters:
+      - name: envoy.http_connection_manager
+        config:
+          server_name: circuit_breaker_test
+          use_remote_address: true
+          generate_request_id: true
+          tracing:
+            operation_name: egress
+            request_headers_for_tags: ['server_name']
+          codec_type: auto
+          stat_prefix: ingress_http
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains:
+              - "*"
+              routes:
+              - match:
+                  prefix: "/"
+                  headers: 
+                    - name: "circuit_breakers_level"
+                      exact_match: "A"
+                route:
+                  cluster: service1
+                  timeout: 3s
+                  priority: "default"
+                  retry_policy:
+                    retry_on: "5xx"
+                    num_retries: 3
+                    per_try_timeout: 0.1s
+              - match:
+                  prefix: "/"
+                  headers: 
+                    - name: "circuit_breakers_level"
+                      exact_match: "default"
+                route:
+                  cluster: service2
+                  priority: "default"
+                  retry_policy:
+                    retry_on: "5xx"
+                    num_retries: 4
+                    per_try_timeout: 0.1s
+          http_filters:
+          - name: envoy.lua
+            config:
+              inline_code: |
+                function envoy_on_request(request_handle)
+                  headers = request_handle:headers()
+                  path = headers:get(":path")
+                  request_handle:logDebug(path)
+                  if path == "/service" then
+                    request_handle:headers():add("circuit_breakers_level", "A")
+                  else
+                    request_handle:headers():add("circuit_breakers_level", "default")
+                  end
+                end
+                function envoy_on_response(response_handle)
+                  headers = response_handle:headers()
+                  if headers:get("x-envoy-overloaded") ~= nil then
+                    response_handle:logDebug("haha breaker success")
+                  else
+                    response_handle:logDebug("haha breaker fail")
+                  end
+                end
+          - name: envoy.router
+            config: {}
+  clusters:
+  - name: service1
+    connect_timeout: 0.250s
+    type: strict_dns
+    lb_policy: round_robin
+    http2_protocol_options: {}
+    circuit_breakers: {      
+      "thresholds": [
+        {
+          "priority": "default",
+          # "max_connections": 1,
+          # "max_pending_requests": 1,
+          # "max_requests": 1,
+          "max_retries": 2
+        }
+      ]
+    }
+    load_assignment:
+      cluster_name: service1
+      endpoints:
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1
+      #           port_value: 80
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1-1
+      #           port_value: 80
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1-2
+      #           port_value: 80
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1-3
+      #           port_value: 80
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: service2
+                port_value: 80
+  - name: service2
+    connect_timeout: 0.250s
+    type: strict_dns
+    lb_policy: round_robin
+    http2_protocol_options: {}
+    circuit_breakers: {      
+      "thresholds": [
+        {
+          "priority": "default",
+          "max_connections": 1024,
+          "max_pending_requests": 1024,
+          "max_requests": 1024,
+          "max_retries": 3
+        }
+      ]
+    }
+    load_assignment:
+      cluster_name: service1
+      endpoints:
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1
+      #           port_value: 80
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1-1
+      #           port_value: 80
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1-2
+      #           port_value: 80
+      # - lb_endpoints:
+      #   - endpoint:
+      #       address:
+      #         socket_address:
+      #           address: service1-3
+      #           port_value: 80
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: service2
+                port_value: 80
+tracing:
+  http:
+    name: envoy.local
+    config:
+      collector_cluster: local
+      collector_endpoint: /var/log/trace_log.log
+node:
+  id: front-node
+  cluster: front-cluster
+admin:
+  access_log_path: "/var/log/envoy_log.log"
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
