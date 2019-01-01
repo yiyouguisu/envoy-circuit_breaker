@@ -10,9 +10,12 @@ app = Flask(__name__)
 
 @app.route('/service', methods=['GET', 'POST'])
 def service():
-	raise Exception("dad")
-	app.logger.info(request.json)
-	return socket.gethostbyname(socket.gethostname())
+	try:
+		raise Exception("dad")
+		app.logger.info(request.json)
+		return socket.gethostbyname(socket.gethostname())
+	except Exception as e:
+		return '{"code": 500001, "msg": "sdfd"}',200,{'Status-Code': 500001}
 
 @app.route('/test', methods=['GET', 'POST'])
 def test():
