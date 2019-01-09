@@ -1,12 +1,14 @@
 current_endpoint = nil
 
-print(type(redis_server))
+print("Redis Server Host: ", redis_server)
+print("Redis Server Port: ", redis_port)
+print("Redis Server Password: ", redis_password)
 
 local redis = require "redis"
 local client = redis.connect(redis_server, 6379)
 client:auth(redis_password)
 response = client:ping() 
-print("AAAAAAAAAAa", response)
+print("Redis Server connect Result: ", response)
 
 function GetAdd(hostname)
     local socket = require("socket")
@@ -17,6 +19,23 @@ function GetAdd(hostname)
     end
     return ListTab
 end
+
+function Split(szFullString, szSeparator)  
+    local nFindStartIndex = 1  
+    local nSplitIndex = 1  
+    local nSplitArray = {}  
+    while true do  
+       local nFindLastIndex = string.find(szFullString, szSeparator, nFindStartIndex)  
+       if not nFindLastIndex then  
+        nSplitArray[nSplitIndex] = string.sub(szFullString, nFindStartIndex, string.len(szFullString))  
+        break  
+       end  
+       nSplitArray[nSplitIndex] = string.sub(szFullString, nFindStartIndex, nFindLastIndex - 1)  
+       nFindStartIndex = nFindLastIndex + string.len(szSeparator)  
+       nSplitIndex = nSplitIndex + 1  
+    end  
+    return nSplitArray  
+end  
 
 local function convertMin2Time(x)
     day = { year = string.sub(x, 0,4), month = string.sub(x, 5,6), day =string.sub(x, 7,8),hour=string.sub(x, 9,10),min=string.sub(x, 11,12) }
@@ -58,7 +77,6 @@ local function mindiff(oldtime, newtime )
 end
 
 local function is_health(http_code, status_code, response_time, max_response_time)
-    print(http_code, status_code, response_time, max_response_time)
     if   (tonumber(http_code) ~= 200 and not (tonumber(http_code) >=400 and tonumber(http_code)<500 ) )  or tonumber(status_code) == 500001 or tonumber(response_time)> tonumber(max_response_time) then
         return false
     else
@@ -72,14 +90,16 @@ function envoy_on_request(request_handle)
     local client = redis.connect(redis_server, redis_port)
     client:auth(redis_password)
     response = client:ping() 
-    request_handle:logInfo("AAAAAAAAAAAAAAAAAAa")
-    request_handle:logInfo(tostring(response))
+    request_handle:logDebug("AAAAAAAAAAAAAAAAAAa")
+    request_handle:logDebug(tostring(response))
 
     local node_ip = unpack(GetAdd())
     local url = request_handle:headers():get(":path")
+    local str_list = Split(url, "?")
+    url = url[1]
     local subs = string.sub(url,2,string.len(url))
     current_endpoint = string.gsub(subs,"/","@").."::"..tostring(node_ip)
-    request_handle:logInfo(current_endpoint)
+    request_handle:logDebug(current_endpoint)
 
     client:hset(current_endpoint, 'cir_count', 1)
 
@@ -102,7 +122,7 @@ function envoy_on_request(request_handle)
         local lock_duration =  os.difftime(curr_timestemp,tonumber(last_lock_time))
         if  lock_duration< tonumber(min_recovery_time) then 
             -- 如果小于min_recovery_time， 则直接熔断
-            request_handle:logInfo("cir_status: open  &  lock_duration < min_recovery_time")
+            request_handle:logDebug("cir_status: open  &  lock_duration < min_recovery_time")
 
             client:hset(current_endpoint, 'cir_count', 0)
             local josnstr = '{"code":"100014","message":"Request has been blocked by circuit breaker mechanism!"}'
@@ -118,11 +138,11 @@ function envoy_on_request(request_handle)
 
         elseif lock_duration < tonumber(max_recovery_time) then
         -- 大于min_recovery_time 小于max_recovery_time 则把熔断器进入半开启的recovery状态
-            request_handle:logInfo("cir_status: open  &  min_recovery_time <= lock_duration < max_recovery_time")
+            request_handle:logDebug("cir_status: open  &  min_recovery_time <= lock_duration < max_recovery_time")
             client:hset(current_endpoint,'cir_status','recovery')
         else
             -- 距离最近的一次开启时间已经超过了max_recovery_time，则直接把熔断器关闭，清空窗口信息，开启下一次计数
-            request_handle:logInfo("cir_status: open  &  lock_duration > max_recovery_time")
+            request_handle:logDebug("cir_status: open  &  lock_duration > max_recovery_time")
             client:hset(current_endpoint,'cir_status','close')
             local key = ('CIR_BRK::'..url)
             client:del(key)   
@@ -130,15 +150,15 @@ function envoy_on_request(request_handle)
 
     -- 熔断器半开启
     elseif cir_status == 'recovery' then
-        request_handle:logInfo("cir_status:  "..cir_status)
+        request_handle:logDebug("cir_status:  "..cir_status)
 
         -- 如果当前熔断器是recovery 既半开启状态的时候，且距离最近的一次开启已经超过了max_recovery_time，则直接把熔断器关闭，清空窗口信息，开启下一次计数
         local curr_timestemp = os.time()
         local lock_duration =  os.difftime(curr_timestemp,tonumber(last_lock_time))
-        request_handle:logInfo("lock_duration:  "..lock_duration)
-        request_handle:logInfo("max_recovery_time:  "..max_recovery_time)
+        request_handle:logDebug("lock_duration:  "..lock_duration)
+        request_handle:logDebug("max_recovery_time:  "..max_recovery_time)
         if lock_duration > tonumber(max_recovery_time) then
-            request_handle:logInfo("set cir_status to close.")
+            request_handle:logDebug("set cir_status to close.")
             client:hset(api,'cir_status','close')
             local key = ('CIR_BRK::'..url)
             client:del(key)
@@ -154,17 +174,17 @@ function envoy_on_response(response_handle)
     local client = redis.connect(redis_server, redis_port)
     client:auth(redis_password)
     response = client:ping() 
-    response_handle:logInfo("BBBADAABABA")
-    response_handle:logInfo(tostring(response))
+    response_handle:logDebug("BBBADAABABA")
+    response_handle:logDebug(tostring(response))
 
-    response_handle:logInfo("current_endpoint: "..current_endpoint)
+    response_handle:logDebug("current_endpoint: "..current_endpoint)
     http_code = response_handle:headers():get(":status")
     status_code = response_handle:headers():get("status-code")
     response_time = response_handle:headers():get("x-envoy-upstream-service-time")
 
     
 
-    response_handle:logInfo( "the value to determine cir_count is: "..http_code..' '..status_code)
+    response_handle:logDebug( "the value to determine cir_count is: "..http_code..' '..status_code)
     if  http_code == '200' and tonumber(cir_count) ==1 and (tonumber(status_code) ~= 500001) and (tonumber(status_code) > 0) and ( tonumber(status_code) < 600000) then 
         client:hset(current_endpoint, 'cir_count', 0)
     end
@@ -194,13 +214,13 @@ function envoy_on_response(response_handle)
             min_recovery_time = 60
         end
         for _key, _value in pairs(api_def_info) do    
-            response_handle:logInfo("CCCCCCCCC".._key.._value)
+            response_handle:logDebug("CCCCCCCCC".._key.._value)
         end
 
 
         local is_ok = is_health(http_code,status_code,response_time,max_response_time)
-        response_handle:logInfo('cir_status of '..current_endpoint..': '..cir_status)
-        response_handle:logInfo('double check cir_status of '..current_endpoint..': '..client:hget(current_endpoint,'cir_status'))
+        response_handle:logDebug('cir_status of '..current_endpoint..': '..cir_status)
+        response_handle:logDebug('double check cir_status of '..current_endpoint..': '..client:hget(current_endpoint,'cir_status'))
 
 
         --  仅仅当熔断器关闭时，需要启动移动窗口开始计数
@@ -216,12 +236,12 @@ function envoy_on_response(response_handle)
             if tonumber(client:hget(key,'timeline')) ==1 then
 
                 shift = mindiff(tonumber(client:hget(key,'timeline')),tonumber(curr_timestemp))
-                response_handle:logInfo('time shift from the first rolling window(mins): '..shift)
+                response_handle:logDebug('time shift from the first rolling window(mins): '..shift)
                 local origin_time = os.date("%Y%m%d%H%M",tonumber(client:hget(key,'timeline')))
                 -- 判断是否需要新建时间窗
                 if shift < n*m then
                  --  完全可以使用已有的时间窗，无需创建新的时间窗
-                    response_handle:logInfo('kept all the rolling windows we currently have.')
+                    response_handle:logDebug('kept all the rolling windows we currently have.')
                     gap = math.floor((shift)/n)
                     -- 这个是需要被的key --
                     --   print(time+gap*n..'-'..time+(gap+1)*n-1)
@@ -235,7 +255,7 @@ function envoy_on_response(response_handle)
 
                     -- 判断是否可以新建全部的时间窗
                     if (shift > (n*m-1 + n*(m-1))) then
-                        response_handle:logInfo('Rebuild all the rolling windows and remove all the expired windows.')
+                        response_handle:logDebug('Rebuild all the rolling windows and remove all the expired windows.')
                         -- ，删除所有老窗口
                         client:del(key)
                         --新建全部窗口
@@ -256,7 +276,7 @@ function envoy_on_response(response_handle)
 
                     else
                         -- 只需要创建部分新窗口，同时删除部分老窗口
-                        response_handle:logInfo('Setup some new rolling windows and remove the corresponding olds')
+                        response_handle:logDebug('Setup some new rolling windows and remove the corresponding olds')
                         local blank_window = math.floor((shift-n*m)/n)+1
                         for i = 0+blank_window,m-1+blank_window do
                             field = (getNewDate(origin_time,i*n,'MINUTE')..'-'..getNewDate(origin_time,(i+1)*n-1,'MINUTE'))
@@ -285,7 +305,7 @@ function envoy_on_response(response_handle)
                 end
 
             else
-                response_handle:logInfo('Initial all the rolling windows since cir_status has been changed.')
+                response_handle:logDebug('Initial all the rolling windows since cir_status has been changed.')
                 for i = 0,m-1 do
                     field = (getNewDate(curr_time,i*n,'MINUTE')..'-'..getNewDate(curr_time,(i+1)*n-1,'MINUTE'))
                     client:hincrby(key, (field..'::TOTAL'), 0)
@@ -307,7 +327,7 @@ function envoy_on_response(response_handle)
 
             
             for i =1, table.getn(hkeys) do
-                response_handle:logInfo("hahahh"..hkeys[i])
+                response_handle:logDebug("hahahh"..hkeys[i])
                 if string.find(hkeys[i],'TOTAL') ~= nil then
                     total = total + tonumber(client:hget(key,hkeys[i]))
                 elseif string.find(hkeys[i],'ERROR') ~= nil then
@@ -315,9 +335,9 @@ function envoy_on_response(response_handle)
                 end
             end
             -- 仅仅当统计周期内，总调用数量大于基本阈值时，才开始检查是否需要触发熔断
-            response_handle:logInfo('total: '..total)
-            response_handle:logInfo('err: '..err)
-            response_handle:logInfo('threshold: '..threshold)
+            response_handle:logDebug('total: '..total)
+            response_handle:logDebug('err: '..err)
+            response_handle:logDebug('threshold: '..threshold)
             if total >  tonumber(threshold) then
                 -- 错误比大于设定的比例，打开熔断器，触发熔断，记录熔点开始时间，清空时间窗
                 if (err/total) > tonumber(err_percent) then
@@ -334,21 +354,21 @@ function envoy_on_response(response_handle)
                 local lock_duration = os.difftime(curr_timestemp,tonumber(last_lock_time))
 
                 if is_ok then
-                    response_handle:logInfo('The recent request is healthy.')
+                    response_handle:logDebug('The recent request is healthy.')
                     math.randomseed(curr_timestemp)  
                     ram = math.random()
                     -- 根据本次请求的结果，如果正确，有概率直接关闭熔断器。
                     if ram < ((lock_duration)/tonumber(max_recovery_time)) then
-                        response_handle:logInfo('Lucky! the cir_status has been changed to close.')
+                        response_handle:logDebug('Lucky! the cir_status has been changed to close.')
                         client:hset(current_endpoint, 'cir_status','close')
                         client:del(key)
                     else
-                        response_handle:logInfo('Too bad, the cir_status has been kept with recovery.')
+                        response_handle:logDebug('Too bad, the cir_status has been kept with recovery.')
                     end
 
                 else
                     --根据本次请求的结果，如果出错，立即回复open状态， 
-                    response_handle:logInfo('The recent request is unhealthy, reopen the lock')
+                    response_handle:logDebug('The recent request is unhealthy, reopen the lock')
                     client:hset(current_endpoint, 'cir_status','open')
                     client:hset(current_endpoint, 'last_lock_time',curr_timestemp)
                 end
